@@ -14,8 +14,8 @@
 --   rex do venv_new dir=~/src/project name=.venv
 --
 -- A venv is recognized by its bin/activate, so Conda environments are not
--- listed. The new shell is a window in the current session, with the venv's
--- parent as its working directory.
+-- listed. Choosing one types "source <venv>/bin/activate" and Return into the
+-- pane the action was run from.
 
 local terminal = "com.superlogical.terminal"
 
@@ -172,29 +172,32 @@ local function discover(dir)
   return found
 end
 
-local function open_venv(path)
-  local dir = dirname(path) or "/"
-  local name = venv_name(path)
-  local activate = join(path, "bin/activate")
+-- The pane the action was started from, or the active window's pane when run
+-- from the CLI.
+local function target_block(ctx)
+  if ctx.block_id ~= nil then return ctx.block_id end
 
-  local win, err = rex.session.new_window{
-    window_label = "venv " .. name,
-    layout = rex.layout.block{
-      flavor  = "com.superlogical.terminal.shell",
-      label   = name,
-      -- Sourcing from initial_input keeps the venv's prompt and deactivate
-      -- function in the shell that stays open, instead of a parent shell.
-      options = {
-        cwd           = dir,
-        initial_input = "source " .. shquote(activate) .. "\r",
-      },
-    },
-  }
-  if win == nil then error("venv: " .. tostring(err), 0) end
-  return win
+  local view = rex.session.view{}
+  if view == nil then return nil end
+  for _, window in ipairs(view.windows or {}) do
+    if window.window_id == view.active_window_id then
+      return window.focused_block_id
+    end
+  end
+  return nil
 end
 
-local function new_venv(dir, name)
+local function activate_venv(path, block_id)
+  local activate = join(path, "bin/activate")
+  local r, err = rex.block.call(terminal, "write", {
+    block_id = block_id,
+    data     = "source " .. shquote(activate) .. "\r",
+  })
+  if r == nil then error("venv: " .. tostring(err), 0) end
+  return block_id
+end
+
+local function new_venv(dir, name, block_id)
   local wanted = name
   if wanted == nil or trim(wanted) == "" then
     local answer, why = rex.ui.input{
@@ -230,18 +233,23 @@ local function new_venv(dir, name)
     error("venv_new: python3 -m venv " .. path .. ": " .. detail, 0)
   end
 
-  local win = open_venv(path)
-  return { venv = path, window_id = win.window_id }
+  activate_venv(path, block_id)
+  return { venv = path, block_id = block_id }
 end
 
 rex.action{
   name        = "venv_shell",
   title       = "Python: Activate Virtualenv…",
-  description = "Pick a virtualenv near this pane and open a window with it activated.",
+  description = "Pick a virtualenv near this pane and activate it in this pane.",
   category    = "Python",
   keywords    = "venv virtualenv python activate",
   args        = { dir = "string?" },
   run         = function(ctx, args)
+    local target = target_block(ctx)
+    if target == nil then
+      error("venv_shell: run this from a terminal pane", 0)
+    end
+
     local dir = resolve_dir(args.dir, ctx.block_id)
     if dir == nil then
       error("venv_shell: pass dir=... when running outside a pane", 0)
@@ -279,21 +287,26 @@ rex.action{
       if why == "cancelled" then return end
       error("venv_shell: " .. tostring(why), 0)
     end
-    if choice == new_id then return new_venv(dir) end
+    if choice == new_id then return new_venv(dir, nil, target) end
 
-    local win = open_venv(choice)
-    return { venv = choice, window_id = win.window_id }
+    activate_venv(choice, target)
+    return { venv = choice, block_id = target }
   end,
 }
 
 rex.action{
   name        = "venv_new",
   title       = "Python: New Virtualenv…",
-  description = "Create a virtualenv in this pane's folder and open a window with it activated.",
+  description = "Create a virtualenv in this pane's folder and activate it in this pane.",
   category    = "Python",
   keywords    = "venv virtualenv python create",
   args        = { dir = "string?", name = "string?" },
   run         = function(ctx, args)
+    local target = target_block(ctx)
+    if target == nil then
+      error("venv_new: run this from a terminal pane", 0)
+    end
+
     local dir = resolve_dir(args.dir, ctx.block_id)
     if dir == nil then
       error("venv_new: pass dir=... when running outside a pane", 0)
@@ -301,7 +314,7 @@ rex.action{
     local ok, derr = check_dir(dir)
     if not ok then error("venv_new: " .. tostring(derr), 0) end
 
-    return new_venv(dir, args.name)
+    return new_venv(dir, args.name, target)
   end,
 }
 
