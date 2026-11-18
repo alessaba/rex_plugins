@@ -7,8 +7,9 @@ require("plugin_name")
 dofile(config_dir .. "/plugin_name.lua")
 ```
 
-Plugins List:
+My Current Plugins:
 - **Docker Shells**: Quickly open shells on currently open Docker Containers
 - **History**: Quickly search your {zsh, bash, fish, ssh} shell history using the super fast `fzf` tool
 - **Layouts**: Save and restore custom layouts and set them as default
 - **Virtual Envs**: Create and Activate custom Python Virtual Environments quickly
+- [Projects - almonk](https://github.com/almonk/rex-projects/blob/main/projects.lua)
