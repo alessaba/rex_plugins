@@ -9,11 +9,13 @@
 --   git_push            push HEAD to a remote branch
 --   git_pull            fast-forward the current branch
 --   git_new_branch      create a branch and switch to it
+--   git_clone           clone a repository and open it in a new split
 --
 -- The pane's shell directory picks the repository. From the CLI:
 --
 --   rex do git_switch_branch dir=~/src/project
 --   rex do git_commit dir=~/src/project message="Tidy the palette chip"
+--   rex do git_clone url=git@github.com:alessaba/dotfiles.git parent=~/Developer
 --
 -- Push targets list the current branch's upstream first, then every other
 -- remote branch alphabetically.
@@ -640,5 +642,109 @@ rex.action{
     local _, err = run_git(root, "switch", "-c", name)
     if err ~= nil then error("git_new_branch: " .. err, 0) end
     return { branch = name }
+  end,
+}
+
+local function clone_name(url)
+  local base = url:gsub("/+$", ""):match("([^/:]+)$") or ""
+  base = base:gsub("%.git$", "")
+  if base == "" or base == "." or base == ".." or base:find("[/\\]") then
+    error("git_clone: cannot derive a folder name from " .. url, 0)
+  end
+  return base
+end
+
+local function clone_parent(ctx, arg)
+  if arg == nil or trim(arg) == "" then
+    return pane_dir(ctx, nil) or (os.getenv("HOME") or ".")
+  end
+
+  local path = expand(trim(arg))
+  if path:sub(1, 1) ~= "/" then
+    local base = pane_dir(ctx, nil)
+    if base == nil then
+      error("git_clone: pass an absolute parent or run this from a pane", 0)
+    end
+    path = base .. "/" .. path
+  end
+  return strip_slash(path)
+end
+
+rex.action{
+  name        = "git_clone",
+  title       = "Git: Clone…",
+  description = "Clone a repository recursively and open it in a new split.",
+  category    = "Git",
+  keywords    = "git clone recursive download",
+  args        = { url = "string?", parent = "string?", name = "string?" },
+  run         = function(ctx, args)
+    local url = args.url
+    if url == nil or trim(url) == "" then
+      local answer, why = rex.ui.input{
+        title       = "Clone repository",
+        placeholder = "git@github.com:owner/repo.git",
+        confirm     = "Clone",
+      }
+      if answer == nil then
+        if why == "cancelled" then return end
+        error("git_clone: " .. tostring(why), 0)
+      end
+      url = answer
+    end
+
+    url = trim(url)
+    if url == "" then error("git_clone: empty URL", 0) end
+
+    local parent = clone_parent(ctx, args.parent)
+    local r = rex.exec({ "test", "-d", parent })
+    if r == nil or not r.ok then
+      error("git_clone: parent folder not found: " .. parent, 0)
+    end
+
+    local name = args.name
+    if name == nil or trim(name) == "" then
+      name = clone_name(url)
+    else
+      name = trim(name)
+      if name == "" or name:find("[/\\]") then
+        error("git_clone: invalid folder name: " .. name, 0)
+      end
+    end
+
+    local target = parent == "/" and ("/" .. name) or (parent .. "/" .. name)
+    local exists = rex.exec({ "test", "-e", target })
+    if exists ~= nil and exists.ok then
+      error("git_clone: " .. target .. " already exists", 0)
+    end
+
+    local clone, cerr = rex.exec({
+      "env", "GIT_TERMINAL_PROMPT=0",
+      "git", "clone", "--recursive", "--", url, target,
+    }, { cwd = parent, timeout = 600 })
+    if clone == nil then error("git_clone: " .. tostring(cerr), 0) end
+    if not clone.ok then
+      local detail = trim(clone.stderr)
+      if detail == "" then detail = trim(clone.stdout) end
+      if detail == "" then detail = "exit " .. tostring(clone.code) end
+      error("git_clone: " .. detail, 0)
+    end
+
+    local opened = false
+    local _, serr = rex.session.new_split{
+      direction = "horizontal",
+      side      = "after",
+      focus     = true,
+      layout    = rex.layout.block{
+        flavor  = "com.superlogical.terminal.shell",
+        options = { cwd = target },
+      },
+    }
+    if serr ~= nil then
+      rex.log("warn", "git_clone: " .. tostring(serr))
+    else
+      opened = true
+    end
+
+    return { path = target, opened = opened }
   end,
 }
