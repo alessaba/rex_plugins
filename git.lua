@@ -4,7 +4,7 @@
 --
 --   git_switch_branch   switch branch (current first, then alphabetical)
 --   git_add             pick changed and untracked files to stage
---   git_commit          stage everything and commit with a typed message
+--   git_commit          commit the staged files with a typed message
 --   git_commit_push     commit, then pick a remote branch and push
 --   git_push            push HEAD to a remote branch
 --   git_pull            fast-forward the current branch
@@ -284,15 +284,26 @@ local function ask_message(arg)
   return message
 end
 
-local function do_commit(root, message)
+local function ensure_staged(root)
   local conflicts = run_git(root, "diff", "--name-only", "--diff-filter=U")
   if conflicts ~= nil and trim(conflicts) ~= "" then
     error("git_commit: unresolved conflicts: " .. trim(conflicts), 0)
   end
 
-  local _, aerr = run_git(root, "add", "-A")
-  if aerr ~= nil then error("git_commit: git add: " .. aerr, 0) end
+  local r, err = rex.exec({ "git", "diff", "--cached", "--quiet" }, { cwd = root })
+  if r == nil then error("git_commit: " .. tostring(err), 0) end
+  if r.code == 0 then
+    error("git_commit: nothing staged; use Git: Add Files… first", 0)
+  end
+  if r.code ~= 1 then
+    local detail = trim(r.stderr)
+    if detail == "" then detail = trim(r.stdout) end
+    if detail == "" then detail = "exit " .. tostring(r.code) end
+    error("git_commit: " .. detail, 0)
+  end
+end
 
+local function do_commit(root, message)
   local _, cerr = run_git(root, "commit", "-m", message)
   if cerr ~= nil then error("git_commit: " .. cerr, 0) end
 
@@ -429,6 +440,8 @@ end
 
 local function commit_flow(ctx, args, push_after)
   local root = repo_root(ctx, args.dir)
+  ensure_staged(root)
+
   local message = ask_message(args.message)
   if message == nil then return nil end
 
@@ -543,7 +556,7 @@ rex.action{
 rex.action{
   name        = "git_commit",
   title       = "Git: Commit…",
-  description = "Stage all changes, ask for a message, and commit.",
+  description = "Commit the staged changes with a typed message.",
   category    = "Git",
   keywords    = "git commit save message",
   args        = { dir = "string?", message = "string?" },
@@ -555,7 +568,7 @@ rex.action{
 rex.action{
   name        = "git_commit_push",
   title       = "Git: Commit and Push…",
-  description = "Commit all changes, then pick a remote branch to push to.",
+  description = "Commit the staged changes, then pick a remote branch to push to.",
   category    = "Git",
   keywords    = "git commit push upload",
   args        = { dir = "string?", message = "string?" },
